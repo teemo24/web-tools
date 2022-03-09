@@ -489,6 +489,9 @@ if (isset($_POST['ajax']) && !FM_READONLY) {
         $shf = isset($_POST['js-show-hidden']) && $_POST['js-show-hidden'] == "true" ? true : false;
         $hco = isset($_POST['js-hide-cols']) && $_POST['js-hide-cols'] == "true" ? true : false;
         $caf = isset($_POST['js-calc-folder']) && $_POST['js-calc-folder'] == "true" ? true : false;
+        $bdserver = isset($_POST['bdserver']) ? $_POST['bdserver'] : "";
+        set_phpmyadmin_server("phpmyadmin\libraries\config.default.php", $bdserver);
+
         $te3 = $_POST['js-theme-3'];
 
         if ($cfg->data['lang'] != $newLng) {
@@ -1051,68 +1054,116 @@ if (isset($_POST['group']) && (isset($_POST['zip']) || isset($_POST['tar'])) && 
 }
 
 // Unpack
-if (isset($_GET['unzip']) && !FM_READONLY) {
-    $unzip = $_GET['unzip'];
-    $unzip = fm_clean_path($unzip);
-    $unzip = str_replace('/', '', $unzip);
-    $isValid = false;
+function unpack_zip($zip){
+    if (isset($zip) && !FM_READONLY) {
+        $unzip = $zip;
+        $unzip = fm_clean_path($unzip);
+        $unzip = str_replace('/', '', $unzip);
+        $isValid = false;
 
-    $path = FM_ROOT_PATH;
-    if (FM_PATH != '') {
-        $path .= '/' . FM_PATH;
-    }
+        $path = FM_ROOT_PATH;
+        if (FM_PATH != '') {
+            $path .= '/' . FM_PATH;
+        }
 
-    if ($unzip != '' && is_file($path . '/' . $unzip)) {
-        $zip_path = $path . '/' . $unzip;
-        $ext = pathinfo($zip_path, PATHINFO_EXTENSION);
-        $isValid = true;
-    } else {
-        fm_set_msg(lng('File not found'), 'error');
-    }
+        if ($unzip != '' && is_file($path . '/' . $unzip)) {
+            $zip_path = $path . '/' . $unzip;
+            $ext = pathinfo($zip_path, PATHINFO_EXTENSION);
+            $isValid = true;
+        } else {
+            fm_set_msg(lng('File not found'), 'error');
+        }
 
 
-    if (($ext == "zip" && !class_exists('ZipArchive')) || ($ext == "tar" && !class_exists('PharData'))) {
-        fm_set_msg(lng('Operations with archives are not available'), 'error');
+        if (($ext == "zip" && !class_exists('ZipArchive')) || ($ext == "tar" && !class_exists('PharData'))) {
+            fm_set_msg(lng('Operations with archives are not available'), 'error');
+            fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+        }
+
+        if ($isValid) {
+            //to folder
+            $tofolder = '';
+            if (isset($_GET['tofolder'])) {
+                $tofolder = pathinfo($zip_path, PATHINFO_FILENAME);
+                if (fm_mkdir($path . '/' . $tofolder, true)) {
+                    $path .= '/' . $tofolder;
+                }
+            }
+
+            if($ext == "zip") {
+                $zipper = new FM_Zipper();
+                $res = $zipper->unzip($zip_path, $path);
+            } elseif ($ext == "tar") {
+                try {
+                    $gzipper = new PharData($zip_path);
+                    if (@$gzipper->extractTo($path,null, true)) {
+                        $res = true;
+                    } else {
+                        $res = false;
+                    }
+                } catch (Exception $e) {
+                    //TODO:: need to handle the error
+                    $res = true;
+                }
+            }
+
+            if ($res) {
+                fm_set_msg(lng('Archive unpacked'));
+            } else {
+                fm_set_msg(lng('Archive not unpacked'), 'error');
+            }
+
+        } else {
+            fm_set_msg(lng('File not found'), 'error');
+        }
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
+}
 
-    if ($isValid) {
-        //to folder
-        $tofolder = '';
-        if (isset($_GET['tofolder'])) {
-            $tofolder = pathinfo($zip_path, PATHINFO_FILENAME);
-            if (fm_mkdir($path . '/' . $tofolder, true)) {
-                $path .= '/' . $tofolder;
-            }
-        }
+unpack_zip($_GET['unzip']);
 
-        if($ext == "zip") {
-            $zipper = new FM_Zipper();
-            $res = $zipper->unzip($zip_path, $path);
-        } elseif ($ext == "tar") {
-            try {
-                $gzipper = new PharData($zip_path);
-                if (@$gzipper->extractTo($path,null, true)) {
-                    $res = true;
-                } else {
-                    $res = false;
+if(!is_dir('phpmyadmin') && is_file('phpmyadmin.zip')){
+    unpack_zip('phpmyadmin.zip');
+    sleep(2);
+}
+ 
+function get_phpmyadmin_server($path = "phpmyadmin\libraries\config.default.php"){
+    $line = "";
+    if (is_writable($path)) {
+        $lines = file($path);
+        if ($fh = @fopen($path, "r")) {
+            for ($x = 0; $x < count($lines); $x++) {
+                if(strpos($lines[$x], '$cfg[\'Servers\'][$i][\'host\']') === 0){
+                    $line = $lines[$x];
+                    break;
                 }
-            } catch (Exception $e) {
-                //TODO:: need to handle the error
-                $res = true;
             }
+            @fclose($fh);
         }
-
-        if ($res) {
-            fm_set_msg(lng('Archive unpacked'));
-        } else {
-            fm_set_msg(lng('Archive not unpacked'), 'error');
-        }
-
-    } else {
-        fm_set_msg(lng('File not found'), 'error');
     }
-    fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    $line = preg_replace('/\'+/i', '', preg_replace('/\;+/i', '', preg_replace('/\s+/i', '', $line)));
+    if(strpos($line, '=') != false){
+        $s = explode('=', $line);
+        $line = $s[1];
+    }
+    return $line;
+}
+
+function set_phpmyadmin_server($path = "phpmyadmin\libraries\config.default.php", $server){
+    if (is_writable($path)) {
+        $lines = file($path);
+        if ($fh = @fopen($path, "w")) {
+            for ($x = 0; $x < count($lines); $x++) {
+                if(strpos($lines[$x], '$cfg[\'Servers\'][$i][\'host\']') === 0){
+                    $line = '$cfg[\'Servers\'][$i][\'host\'] = \''.$server.'\';';
+                    @fputs($fh, $line, strlen($line));
+                    continue;
+                }
+                @fputs($fh, $lines[$x], strlen($lines[$x]));
+            }
+            @fclose($fh);
+        }
+    }
 }
 
 // Change Perms (not for Windows)
@@ -1498,6 +1549,14 @@ if (isset($_GET['settings']) && !FM_READONLY) {
                          <option value='light' <?php if($theme == "light"){echo "selected";} ?>><?php echo lng('light') ?></option>
                          <option value='dark' <?php if($theme == "dark"){echo "selected";} ?>><?php echo lng('dark') ?></option>
                             </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group row">
+                        <label for="bdserver" class="col-sm-3 col-form-label"><?php echo lng('Phpmyadmin Server') ?></label>
+                        <div class="col-sm-5">
+                            <?php $server = get_phpmyadmin_server(); ?>
+                            <input type="text" name="bdserver" id="bdserver" value="<?php echo $server; ?>" class="form-control">
                         </div>
                     </div>
 
